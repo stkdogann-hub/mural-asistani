@@ -4,59 +4,38 @@ from PIL import Image
 import pandas as pd
 import urllib.parse
 import json
+import io
 
 # --- AYARLAR ---
 st.set_page_config(page_title="Mural Asistanı", layout="wide", page_icon="🎨")
 
-# Yan Menü: Sistem Bilgisi
-st.sidebar.header("🛠 Sistem Durumu")
+# Yan Menü: Sistem Durumu
+st.sidebar.header("🛠 Sistem Paneli")
 
 # 1. API Key Bağlantısı
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
-    st.sidebar.success("Anahtar Bağlandı ✅")
+    st.sidebar.success("Sistem Online 🟢")
 except:
-    st.error("API Key yok! Lütfen Secrets ayarına ekle.")
+    st.error("API Key eksik! Lütfen ayarlardan ekleyin.")
     st.stop()
 
-# --- AKILLI MODEL SEÇİCİ (OTOMATİK) ---
+# --- AKILLI MODEL SEÇİCİ ---
 def get_working_model():
-    """Senin hesabında çalışan modeli otomatik bulur"""
+    """Çalışan en iyi modeli otomatik bulur"""
     try:
-        # Mevcut modelleri listele
-        available_models = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                available_models.append(m.name)
+        # Öncelik sırası: Flash (Hızlı) -> Pro (Güçlü)
+        priority = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro-vision']
+        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         
-        # Öncelik sırasına göre dene
-        priority_list = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro-vision']
+        for p in priority:
+            if p in available:
+                st.sidebar.info(f"Motor: {p.split('/')[-1]}")
+                return genai.GenerativeModel(p)
         
-        selected_model = None
-        for model_name in priority_list:
-            if model_name in available_models:
-                selected_model = model_name
-                break
-        
-        # Hiçbiri yoksa listedeki ilk "vision" modelini al
-        if not selected_model:
-            for m in available_models:
-                if 'vision' in m or '1.5' in m:
-                    selected_model = m
-                    break
-        
-        # Bulunan modeli ekrana yaz (Bilgi amaçlı)
-        if selected_model:
-            st.sidebar.info(f"Kullanılan Model: {selected_model}")
-            return genai.GenerativeModel(selected_model)
-        else:
-            st.sidebar.error("Hiçbir model bulunamadı!")
-            return None
-            
-    except Exception as e:
-        st.sidebar.error(f"Model arama hatası: {e}")
-        # Hata olursa varsayılan olarak en garantisini dene
+        return genai.GenerativeModel('gemini-1.5-flash') # Varsayılan
+    except:
         return genai.GenerativeModel('gemini-1.5-flash')
 
 # --- FONKSİYONLAR ---
@@ -68,27 +47,23 @@ def create_calendar_link(title, date_str, details):
         url = f"{base}&text={urllib.parse.quote(title)}&dates={dates}&details={urllib.parse.quote(details)}"
         return url
     except:
-        return "#"
+        return None
 
 def analyze_image_with_ai(image):
-    # OTOMATİK MODELİ ÇAĞIR
     model = get_working_model()
-    
-    if not model:
-        return []
+    if not model: return []
 
     prompt = """
-    Bu resmi analiz et.
-    GÖREV: Resimdeki mural projelerini veya notları tespit et.
-    ÇIKTI (Sadece JSON):
+    Bu resmi analiz et ve içindeki iş fırsatlarını/projeleri tablo verisi olarak çıkar.
+    ÇIKTI (Saf JSON listesi):
     [
       {
-        "project_name": "Proje Adı",
-        "deadline": "YYYY-MM-DD" (Yoksa null),
-        "price": "Bütçe",
-        "state": "Konum",
-        "link": "Link veya 'Resimde'",
-        "wall_desc": "Not"
+        "Proje Adı": "Proje ismini yaz",
+        "Tarih": "YYYY-MM-DD" (Yoksa null),
+        "Bütçe": "Para birimiyle yaz",
+        "Konum": "Şehir/Ülke",
+        "Link": "Varsa URL",
+        "Notlar": "Kısa açıklama"
       }
     ]
     """
@@ -96,56 +71,73 @@ def analyze_image_with_ai(image):
         response = model.generate_content([prompt, image])
         text = response.text.replace('```json', '').replace('```', '').strip()
         return json.loads(text)
-    except Exception as e:
-        st.error(f"AI Analiz Hatası: {e}")
+    except:
         return []
 
 # --- ARAYÜZ ---
 st.title("🎨 Sıtkı'nın Mural Asistanı")
-st.markdown("---")
+st.markdown("### 📊 Proje Takip Tablosu")
 
-with st.expander("➕ Yeni Proje / Resim Yükle", expanded=True):
-    uploaded_files = st.file_uploader("Resim Yükle", accept_multiple_files=True, type=['jpg', 'png', 'jpeg'])
+# Dosya Yükleme
+with st.expander("➕ Yeni İş / Resim Ekle", expanded=False):
+    uploaded_files = st.file_uploader("Resim yükle", accept_multiple_files=True, type=['jpg', 'png', 'jpeg'])
     
-    if uploaded_files and st.button("Analiz Et 🚀"):
-        if 'projects' not in st.session_state: st.session_state.projects = []
+    if uploaded_files and st.button("Tabloya Ekle 🚀"):
+        if 'data' not in st.session_state: st.session_state.data = []
         
-        bar = st.progress(0, text="Otomatik model seçiliyor ve analiz ediliyor...")
-        
+        bar = st.progress(0, text="Veriler tabloya işleniyor...")
         for i, file in enumerate(uploaded_files):
-            try:
-                img = Image.open(file)
-                results = analyze_image_with_ai(img)
-                if results:
-                    for res in results:
-                        res['image_data'] = file
-                        st.session_state.projects.append(res)
-            except Exception as e:
-                st.error(f"Dosya hatası: {e}")
-            
+            img = Image.open(file)
+            results = analyze_image_with_ai(img)
+            if results:
+                for res in results:
+                    # Takvim Linkini Hazırla
+                    cal_url = create_calendar_link(
+                        f"Mural: {res.get('Proje Adı')}", 
+                        res.get('Tarih'), 
+                        f"Bütçe: {res.get('Bütçe')}\nLink: {res.get('Link')}"
+                    )
+                    res['Takvime Ekle'] = cal_url # Linki veriye ekle
+                    st.session_state.data.append(res)
             bar.progress((i + 1) / len(uploaded_files))
-        
         bar.empty()
-        st.success("✅ Listeye eklendi!")
+        st.success("Tablo güncellendi!")
 
-if 'projects' in st.session_state and st.session_state.projects:
-    df = pd.DataFrame(st.session_state.projects)
-    if 'deadline' in df.columns:
-        df['deadline'] = pd.to_datetime(df['deadline'], errors='coerce')
-        df = df.sort_values(by='deadline')
+# --- TABLO GÖRÜNÜMÜ (EXCEL TARZI) ---
+if 'data' in st.session_state and st.session_state.data:
+    df = pd.DataFrame(st.session_state.data)
 
-    st.subheader(f"📋 Projeler ({len(df)})")
-    
-    for index, row in df.iterrows():
-        c1, c2, c3 = st.columns([1, 3, 1])
-        with c1:
-            if 'image_data' in row: st.image(row['image_data'], use_container_width=True)
-        with c2:
-            st.markdown(f"### {row.get('project_name', 'Proje')}")
-            st.caption(f"📍 {row.get('state')} | 💰 {row.get('price')}")
-            if pd.notnull(row.get('deadline')):
-                st.markdown(f"🗓️ **:red[{row['deadline'].strftime('%Y-%m-%d')}]**")
-        with c3:
-            cal = create_calendar_link(f"Mural: {row.get('project_name')}", row.get('deadline'), row.get('link'))
-            st.link_button("📅 Takvime Ekle", cal)
-        st.divider()
+    # Tarih formatını düzelt
+    if 'Tarih' in df.columns:
+        df['Tarih'] = pd.to_datetime(df['Tarih'], errors='coerce')
+
+    # TABLO AYARLARI (Sütunları Güzelleştirme)
+    column_config = {
+        "Proje Adı": st.column_config.TextColumn("Proje Adı", width="medium"),
+        "Tarih": st.column_config.DateColumn("Son Başvuru", format="DD.MM.YYYY"),
+        "Bütçe": st.column_config.TextColumn("Bütçe", width="small"),
+        "Konum": st.column_config.TextColumn("Konum", width="small"),
+        "Link": st.column_config.LinkColumn("Başvuru Linki", display_text="🔗 Başvur"),
+        "Takvime Ekle": st.column_config.LinkColumn("Takvim", display_text="📅 Kaydet"),
+        "Notlar": st.column_config.TextColumn("Notlar", width="large"),
+    }
+
+    # Tabloyu Göster (Sıralanabilir, Genişletilebilir)
+    st.dataframe(
+        df, 
+        use_container_width=True, 
+        column_config=column_config, 
+        hide_index=True
+    )
+
+    # İndirme Butonu (Excel/CSV)
+    csv = df.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="📥 Tabloyu İndir (CSV)",
+        data=csv,
+        file_name='mural_projeleri.csv',
+        mime='text/csv',
+    )
+
+else:
+    st.info("Tablo boş. Yukarıdan resim yükleyerek başlayabilirsin.")
