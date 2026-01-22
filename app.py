@@ -33,7 +33,7 @@ def create_calendar_link(title, date_str, details):
 def analyze_image_with_ai(image):
     """Resmi Gemini ile analiz eder"""
     # En güvenilir model (Flash)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-1.5-pro')
     
     prompt = """
     Bu resmi bir mural sanatçısı için analiz et.
