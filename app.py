@@ -5,22 +5,37 @@ import pandas as pd
 import urllib.parse
 import json
 
-# --- AYARLAR ---
+# --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Mural Asistanı", layout="wide", page_icon="🎨")
 
-# Sürüm Kontrolü (Hata ayıklamak için ekrana yazıyoruz)
-st.sidebar.info(f"AI Kütüphane Sürümü: {genai.__version__}")
+# --- YAN MENÜ (DEBUG VE AYARLAR) ---
+st.sidebar.title("⚙️ Sistem Durumu")
 
-# API Key
+# 1. API Key Kontrolü
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
+    st.sidebar.success("Anahtar Bulundu ✅")
 except Exception as e:
-    st.error("API Key hatası! Lütfen Secrets ayarlarını kontrol et.")
+    st.error("API Key bulunamadı! Lütfen Secrets ayarlarını kontrol et.")
     st.stop()
 
-# --- FONKSİYONLAR ---
+# 2. Kütüphane Sürümü
+st.sidebar.info(f"AI Sürümü: {genai.__version__}")
+
+# --- ANA FONKSİYONLAR ---
+
+def get_vision_model():
+    """Çalışan en iyi görüntü modelini otomatik seçer"""
+    try:
+        # Önce en hızlı ve yeni modeli dene
+        return genai.GenerativeModel('gemini-1.5-flash')
+    except:
+        # Olmazsa pro versiyonunu dene
+        return genai.GenerativeModel('gemini-1.5-pro')
+
 def create_calendar_link(title, date_str, details):
+    """Takvim linki oluşturur"""
     try:
         base = "https://www.google.com/calendar/render?action=TEMPLATE"
         dt = pd.to_datetime(date_str)
@@ -31,16 +46,18 @@ def create_calendar_link(title, date_str, details):
         return "#"
 
 def analyze_image_with_ai(image):
-    # En hızlı ve yeni model
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    """Resmi Analiz Et"""
+    # Modeli güvenli şekilde çağır
+    model = get_vision_model()
     
     prompt = """
-    Bu resmi bir mural sanatçısı için analiz et.
-    GÖREV: Resimdeki TÜM projeleri tespit et.
-    ÇIKTI: Sadece JSON listesi ver.
+    Bu resimdeki mural projelerini veya iş fırsatlarını analiz et.
+    GÖREV: Tüm proje detaylarını JSON formatında listele.
+    
+    ÇIKTI FORMATI (Sadece bu JSON listesini ver):
     [
       {
-        "project_name": "Proje Adı",
+        "project_name": "Proje İsmi",
         "deadline": "YYYY-MM-DD" (Tarih yoksa null),
         "price": "Bütçe",
         "state": "Konum",
@@ -49,54 +66,80 @@ def analyze_image_with_ai(image):
       }
     ]
     """
+    
     try:
         response = model.generate_content([prompt, image])
+        # JSON temizliği
         text = response.text.replace('```json', '').replace('```', '').strip()
         return json.loads(text)
     except Exception as e:
-        st.error(f"AI Analiz Hatası: {e}")
+        st.error(f"Analiz sırasında hata: {e}")
         return []
 
-# --- ARAYÜZ ---
+# --- ARAYÜZ (FRONTEND) ---
+
 st.title("🎨 Sıtkı'nın Mural Asistanı")
 st.markdown("---")
 
-with st.expander("➕ Yeni Proje Yükle", expanded=True):
+# Resim Yükleme Alanı
+with st.expander("➕ Yeni Proje Ekle", expanded=True):
     uploaded_files = st.file_uploader("Resim Seç", accept_multiple_files=True, type=['jpg', 'png', 'jpeg'])
     
     if uploaded_files and st.button("Analiz Et 🚀"):
         if 'projects' not in st.session_state: st.session_state.projects = []
         
-        bar = st.progress(0, text="Analiz ediliyor...")
-        for i, file in enumerate(uploaded_files):
-            img = Image.open(file)
-            results = analyze_image_with_ai(img)
-            if results:
-                for res in results:
-                    res['image_data'] = file
-                    st.session_state.projects.append(res)
-            bar.progress((i + 1) / len(uploaded_files))
+        my_bar = st.progress(0, text="Yapay zeka çalışıyor...")
         
-        bar.empty()
-        st.success("Listeye eklendi!")
+        for i, file in enumerate(uploaded_files):
+            try:
+                img = Image.open(file)
+                results = analyze_image_with_ai(img)
+                if results:
+                    for res in results:
+                        res['image_data'] = file
+                        st.session_state.projects.append(res)
+            except Exception as e:
+                st.error(f"Dosya okuma hatası: {e}")
+                
+            my_bar.progress((i + 1) / len(uploaded_files))
+        
+        my_bar.empty()
+        st.success("İşlem Tamamlandı!")
 
-# --- LİSTE ---
+# --- LİSTE GÖRÜNÜMÜ ---
+
 if 'projects' in st.session_state and st.session_state.projects:
     df = pd.DataFrame(st.session_state.projects)
+    
+    # Tarih sıralaması
     if 'deadline' in df.columns:
         df['deadline'] = pd.to_datetime(df['deadline'], errors='coerce')
         df = df.sort_values(by='deadline')
 
     st.subheader(f"📋 Projeler ({len(df)})")
+    
     for index, row in df.iterrows():
-        c1, c2, c3 = st.columns([1, 3, 1])
-        with c1:
-            if 'image_data' in row: st.image(row['image_data'])
-        with c2:
-            st.markdown(f"### {row.get('project_name')}")
-            st.caption(f"📍 {row.get('state')} | 💰 {row.get('price')}")
-            if pd.notnull(row.get('deadline')):
-                st.markdown(f"🗓️ **:red[{row['deadline'].strftime('%Y-%m-%d')}]**")
-        with c3:
-            st.link_button("📅 Takvime Ekle", create_calendar_link(f"DEADLINE: {row.get('project_name')}", row.get('deadline'), row.get('link')))
-        st.divider()
+        with st.container():
+            c1, c2, c3 = st.columns([1, 3, 1])
+            
+            with c1:
+                if 'image_data' in row:
+                    st.image(row['image_data'], use_container_width=True)
+            
+            with c2:
+                name = row.get('project_name', 'Proje')
+                deadline = row.get('deadline')
+                
+                st.markdown(f"### {name}")
+                st.caption(f"📍 {row.get('state', '-')} | 💰 {row.get('price', '-')}")
+                st.write(f"📝 {row.get('wall_desc', '-')}")
+                
+                if pd.notnull(deadline):
+                    st.markdown(f"🗓️ **:red[{deadline.strftime('%Y-%m-%d')}]**")
+            
+            with c3:
+                cal_link = create_calendar_link(f"Mural: {name}", row.get('deadline'), row.get('link'))
+                st.link_button("📅 Takvime Ekle", cal_link)
+                
+            st.divider()
+        
