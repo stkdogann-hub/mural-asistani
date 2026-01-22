@@ -2,119 +2,97 @@ import streamlit as st
 import google.generativeai as genai
 from PIL import Image
 import pandas as pd
-import urllib.parse
 import json
 
 # --- AYARLAR ---
-st.set_page_config(page_title="Mural Tablosu", layout="wide", page_icon="📊")
+st.set_page_config(page_title="Mural Tablosu", layout="wide", page_icon="🕵️‍♂️")
 
-# --- SİSTEM BAŞLANGICI ---
+st.title("🕵️‍♂️ Sıtkı'nın Mural Tablosu (Dedektif Modu)")
+st.info("Bu mod, hataları gizlemez. Eğer tablo boş geliyorsa sebebi aşağıda kırmızı kutuda yazar.")
+
+# --- SİSTEM HAZIRLIK ---
 if 'data' not in st.session_state:
     st.session_state.data = []
-
-# Yan Menü
-st.sidebar.title("⚙️ Kontrol Paneli")
 
 # API Key Bağlantısı
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
-    st.sidebar.success("Sistem Hazır ✅")
-except:
-    st.error("API Key bulunamadı! Lütfen ayarlardan ekleyin.")
+except Exception as e:
+    st.error(f"🚨 API Key Hatası: {e}")
     st.stop()
 
-# --- MODEL SEÇİCİ ---
-def get_model():
-    try:
-        return genai.GenerativeModel('gemini-1.5-flash')
-    except:
-        return genai.GenerativeModel('gemini-1.5-pro')
-
-# --- ANALİZ FONKSİYONU ---
-def analyze_image(image):
-    model = get_model()
-    prompt = """
-    Bu resmi analiz et. Mural projelerini veya iş fırsatlarını bir Excel tablosu satırı gibi çıkar.
+# --- ANALİZ FONKSİYONU (HATA GİZLEMEZ!) ---
+def analyze_image_debug(image):
+    # Model: Gemini 1.5 Flash (En günceli)
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
-    ÇIKTI FORMATI (Saf JSON Listesi):
+    prompt = """
+    Bu resmi analiz et. Mural projelerini tablo verisi olarak çıkar.
+    Eğer resimde proje yoksa boş liste ver.
+    
+    ÇIKTI FORMATI (Saf JSON):
     [
       {
         "Proje": "Proje Adı",
-        "Tarih": "YYYY-MM-DD" (Tarih yoksa null bırak),
-        "Bütçe": "Para birimiyle (Örn: $5000)",
+        "Tarih": "YYYY-MM-DD",
+        "Bütçe": "Para birimiyle",
         "Konum": "Şehir/Eyalet",
-        "Durum": "Başvuru Bekliyor",
-        "Link": "Varsa link, yoksa 'Resimde'",
-        "Detay": "Kısa not"
+        "Link": "Varsa link",
+        "Notlar": "Detay"
       }
     ]
     """
-    try:
-        response = model.generate_content([prompt, image])
-        text = response.text.replace('```json', '').replace('```', '').strip()
-        return json.loads(text)
-    except:
-        return []
+    
+    # BURADA TRY-EXCEPT YOK! HATAYI GÖRECEĞİZ.
+    response = model.generate_content([prompt, image])
+    
+    # AI'nın verdiği ham cevabı ekrana basalım (Debug için)
+    with st.expander("🤖 AI'dan Gelen Ham Cevap (Tıkla Gör)", expanded=False):
+        st.code(response.text)
+
+    # JSON Temizliği
+    text = response.text.replace('```json', '').replace('```', '').strip()
+    return json.loads(text)
 
 # --- ARAYÜZ ---
-st.title("📊 Sıtkı'nın Proje Tablosu")
-
-# 1. Yükleme Alanı
-with st.expander("➕ Yeni Dosya Yükle (Tabloya Ekle)", expanded=True):
-    uploaded_files = st.file_uploader("Resim, Screenshot veya Notlar", accept_multiple_files=True, type=['jpg', 'png', 'jpeg'])
+with st.container():
+    uploaded_files = st.file_uploader("Resimleri Yükle", accept_multiple_files=True, type=['jpg', 'png', 'jpeg'])
     
-    if uploaded_files and st.button("Analiz Et ve Tabloya İşle 🚀"):
-        bar = st.progress(0, text="Yapay zeka tabloyu dolduruyor...")
+    if uploaded_files and st.button("Analiz Et (Hataları Göster) 🚀"):
         
-        for i, file in enumerate(uploaded_files):
-            img = Image.open(file)
-            results = analyze_image(img)
+        for file in uploaded_files:
+            st.write(f"📂 **{file.name}** işleniyor...")
             
-            if results:
-                for res in results:
-                    st.session_state.data.append(res)
-            
-            bar.progress((i + 1) / len(uploaded_files))
-            
-        bar.empty()
-        st.success("Veriler tabloya eklendi!")
+            try:
+                img = Image.open(file)
+                results = analyze_image_debug(img)
+                
+                if results:
+                    st.success(f"✅ {file.name}: {len(results)} proje bulundu!")
+                    for res in results:
+                        st.session_state.data.append(res)
+                else:
+                    st.warning(f"⚠️ {file.name}: AI bu resimde veri bulamadı (Boş liste döndü).")
+                    
+            except Exception as e:
+                # İŞTE SORUNU BURADA GÖRECEĞİZ
+                st.error(f"🚨 {file.name} HATASI: {e}")
+                st.write("Olası sebepler: API Key yanlış, Model bölgenizde kapalı veya Resim formatı bozuk.")
 
-# 2. TABLO ALANI (Excel Görünümü)
+# --- TABLO ALANI ---
 st.divider()
 st.subheader("📋 Proje Listesi")
 
-# Veri varsa veya yoksa tablo yapısını oluştur
 if st.session_state.data:
     df = pd.DataFrame(st.session_state.data)
 else:
-    # Boşken bile başlıkları göster
-    df = pd.DataFrame(columns=["Proje", "Tarih", "Bütçe", "Konum", "Durum", "Link", "Detay"])
+    df = pd.DataFrame(columns=["Proje", "Tarih", "Bütçe", "Konum", "Link", "Notlar"])
 
-# Tarih formatını düzelt
-if 'Tarih' in df.columns and not df.empty:
-    df['Tarih'] = pd.to_datetime(df['Tarih'], errors='coerce')
-
-# Tablo Ayarları
-column_config = {
-    "Proje": st.column_config.TextColumn("Proje Adı", width="medium"),
-    "Tarih": st.column_config.DateColumn("Son Başvuru", format="DD.MM.YYYY"),
-    "Bütçe": st.column_config.TextColumn("Bütçe", width="small"),
-    "Link": st.column_config.LinkColumn("Link", display_text="🔗 Git"),
-    "Durum": st.column_config.SelectboxColumn("Durum", options=["Başvuru Bekliyor", "Başvuruldu", "Tamamlandı"]),
-}
-
-# TABLOYU ÇİZ
+# Tabloyu Çiz
 st.data_editor(
     df,
-    column_config=column_config,
     use_container_width=True,
-    num_rows="dynamic", # Satır ekleyip silmene izin verir
-    hide_index=True,
+    num_rows="dynamic",
     key="editor"
 )
-
-# İndirme Butonu
-if not df.empty:
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Excel Olarak İndir (CSV)", csv, "mural_listesi.csv", "text/csv")
