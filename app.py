@@ -28,7 +28,7 @@ def create_calendar_link(title, date_str, details):
         return "#"
 
 def analyze_image_with_ai(image):
-    model = genai.GenerativeModel('gemini-1.5-flash')
+   model = genai.GenerativeModel('gemini-1.5-pro')
     prompt = """
     Bu resmi bir mural sanatçısı için analiz et. Resim bir ekran görüntüsü veya el çizimi notlar olabilir.
     GÖREV: Resimdeki TÜM projeleri tespit et.
