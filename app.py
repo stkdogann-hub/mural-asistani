@@ -23,39 +23,97 @@ def create_calendar_link(title, date_str, details):
     """Google Takvim linki oluşturur"""
     try:
         base = "https://www.google.com/calendar/render?action=TEMPLATE"
-        # Tarihi datetime objesine çevir
         dt = pd.to_datetime(date_str)
-        # Format: YYYYMMDD (Tüm gün etkinliği için)
         dates = f"{dt.strftime('%Y%m%d')}/{dt.strftime('%Y%m%d')}"
-        
-        # Linki oluştur
         url = f"{base}&text={urllib.parse.quote(title)}&dates={dates}&details={urllib.parse.quote(details)}"
         return url
     except:
         return "#"
 
 def analyze_image_with_ai(image):
-    """Resmi Gemini 1.5 Pro ile analiz eder"""
-    # MODELİ BURADA GÜNCELLEDİK (Flash yerine Pro kullanıyoruz)
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    """Resmi Gemini ile analiz eder"""
+    # En güvenilir model (Flash)
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = """
-    Bu resmi bir mural sanatçısı için analiz et. Resim bir ekran görüntüsü, Instagram postu veya el çizimi notlar olabilir.
+    Bu resmi bir mural sanatçısı için analiz et.
+    GÖREV: Resimdeki TÜM projeleri tespit et. Defter notlarıysa her başlığı ayır.
     
-    GÖREV: Resimdeki TÜM projeleri ve iş fırsatlarını tespit et.
-    Eğer resimde birden fazla proje varsa (örneğin defter notlarında 3 farklı başlık varsa), her birini ayrı ayrı listele.
-    
-    ÇIKTI FORMATI (Sadece saf JSON listesi ver, markdown kullanma):
+    ÇIKTI FORMATI (Sadece saf JSON listesi ver):
     [
       {
-        "project_name": "Proje Adı (Kısa ve net)",
-        "deadline": "YYYY-MM-DD" (Eğer yıl yoksa 2026 kabul et. Tarih yoksa null yap),
-        "price": "Bütçe/Ücret (Bulamazsan 'Belirtilmemiş' yaz)",
-        "state": "Konum (Eyalet kısaltması veya Şehir)",
-        "link": "Başvuru linki (Yoksa 'Resimde')",
-        "wall_desc": "Duvarın görsel tanımı (Örn: Köprü altı, Bina cephesi)"
+        "project_name": "Proje Adı",
+        "deadline": "YYYY-MM-DD" (Tarih yoksa null),
+        "price": "Bütçe",
+        "state": "Konum",
+        "link": "Link veya 'Resimde'",
+        "wall_desc": "Görsel not"
       }
     ]
     """
     
+    # HATA VEREN KISIM BURASIYDI (Şimdi düzeltildi)
     try:
+        response = model.generate_content([prompt, image])
+        text = response.text.replace('```json', '').replace('```', '').strip()
+        return json.loads(text)
+    except Exception as e:
+        # Hata olursa ekrana yaz ama uygulamayı çökertme
+        st.error(f"AI Analiz Hatası: {e}")
+        return []
+
+# --- ARAYÜZ ---
+
+st.title("🎨 Sıtkı'nın Mural Asistanı")
+st.markdown("---")
+
+with st.expander("➕ Yeni Proje Yükle", expanded=True):
+    uploaded_files = st.file_uploader("Resimleri Seç", accept_multiple_files=True, type=['jpg', 'png', 'jpeg'])
+    
+    if uploaded_files and st.button("Analiz Et 🚀"):
+        if 'projects' not in st.session_state: st.session_state.projects = []
+        
+        my_bar = st.progress(0, text="Yapay zeka çalışıyor...")
+        
+        for i, file in enumerate(uploaded_files):
+            img = Image.open(file)
+            results = analyze_image_with_ai(img)
+            
+            if results:
+                for res in results:
+                    res['image_data'] = file
+                    st.session_state.projects.append(res)
+            
+            my_bar.progress((i + 1) / len(uploaded_files))
+            
+        my_bar.empty()
+        st.success("✅ İşlem Tamam!")
+
+# --- LİSTE ---
+
+if 'projects' in st.session_state and st.session_state.projects:
+    df = pd.DataFrame(st.session_state.projects)
+    if 'deadline' in df.columns:
+        df['deadline'] = pd.to_datetime(df['deadline'], errors='coerce')
+        df = df.sort_values(by='deadline')
+
+    st.subheader(f"📋 Projeler ({len(df)})")
+    
+    for index, row in df.iterrows():
+        with st.container():
+            c1, c2, c3 = st.columns([1, 3, 1])
+            with c1:
+                if 'image_data' in row: st.image(row['image_data'], use_container_width=True)
+            with c2:
+                name = row.get('project_name', 'Proje')
+                deadline = row.get('deadline')
+                st.markdown(f"### {name}")
+                st.caption(f"📍 {row.get('state')} | 💰 {row.get('price')}")
+                
+                if pd.notnull(deadline):
+                    d_str = deadline.strftime('%Y-%m-%d')
+                    st.markdown(f"🗓️ **Deadline:** :red[{d_str}]")
+                else:
+                    st.write("🗓️ Tarih Yok")
+            with c3:
+                cal_
