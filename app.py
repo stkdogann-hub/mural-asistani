@@ -4,132 +4,83 @@ from PIL import Image
 import pandas as pd
 import json
 
-# --- AYARLAR ---
-st.set_page_config(page_title="Mural Tablosu", layout="wide", page_icon="🎨")
+# --- BASİT AYARLAR ---
+st.set_page_config(page_title="Mural Asistanı", layout="wide")
+st.title("🎨 Mural Proje Listesi")
 
-st.title("🎨 Sıtkı'nın Mural Tablosu (Garantili Mod)")
-
-# --- SİSTEM HAZIRLIK ---
-if 'data' not in st.session_state:
-    st.session_state.data = []
-
-# API Key Bağlantısı
+# --- 1. SİSTEM KONTROLÜ ---
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
-except Exception as e:
-    st.error(f"🚨 API Key Hatası: {e}")
+except:
+    st.error("🚨 HATA: API Anahtarı bulunamadı! Secrets kısmını kontrol et.")
     st.stop()
 
-# --- YAN MENÜ: MODEL SEÇİMİ (EN ÖNEMLİ KISIM) ---
-st.sidebar.header("⚙️ Model Ayarı")
-st.sidebar.info("Aşağıdaki listeden çalışan bir model seç.")
-
-available_models = []
-try:
-    # Google'a soruyoruz: "Hangi modellerin var?"
-    for m in genai.list_models():
-        if 'generateContent' in m.supported_generation_methods:
-            # Model isminin başındaki 'models/' kısmını temizle
-            name = m.name.replace('models/', '')
-            available_models.append(name)
-except Exception as e:
-    st.sidebar.error(f"Model listesi alınamadı: {e}")
-
-# Eğer liste geldiyse kutucuğa koy, gelmediyse elle yazılanı kullan
-if available_models:
-    # Vision (Resim gören) modelleri öne çıkarmaya çalış
-    default_ix = 0
-    if 'gemini-1.5-flash' in available_models:
-        default_ix = available_models.index('gemini-1.5-flash')
-    elif 'gemini-pro-vision' in available_models:
-        default_ix = available_models.index('gemini-pro-vision')
+# --- 2. ÇALIŞAN MODELİ BUL ---
+def get_best_model():
+    """Senin hesabında açık olan ilk modeli bulur ve onu kullanır"""
+    try:
+        # Google'dan senin için açık olan modelleri iste
+        my_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         
-    selected_model_name = st.sidebar.selectbox(
-        "Kullanılacak Model:", 
-        available_models, 
-        index=default_ix
-    )
-else:
-    st.sidebar.warning("Liste çekilemedi, varsayılan deneniyor.")
-    selected_model_name = "gemini-1.5-flash"
+        # Öncelik sırası (Hızlı -> Güçlü -> Eski)
+        preferred = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro-vision']
+        
+        for p in preferred:
+            if p in my_models:
+                return genai.GenerativeModel(p)
+        
+        # Listede bulamazsa varsayılanı dene
+        return genai.GenerativeModel('gemini-1.5-flash')
+    except:
+        # Liste alamazsa kör atışı yap
+        return genai.GenerativeModel('gemini-1.5-flash')
 
-st.sidebar.success(f"Seçilen: {selected_model_name}")
-
-
-# --- ANALİZ FONKSİYONU ---
-def analyze_image_final(image, model_name):
-    # Seçilen modeli yükle
-    model = genai.GenerativeModel(model_name)
+# --- 3. ANALİZ ---
+def analyze_simple(image):
+    model = get_best_model()
     
     prompt = """
-    Bu resmi analiz et. Mural projelerini Excel tablosu formatında çıkar.
-    ÇIKTI (Sadece JSON):
-    [
-      {
-        "Proje": "Proje Adı",
-        "Tarih": "YYYY-MM-DD",
-        "Bütçe": "Para birimiyle",
-        "Konum": "Şehir/Eyalet",
-        "Link": "Varsa link",
-        "Notlar": "Detay"
-      }
-    ]
+    Bu resimdeki iş fırsatlarını veya mural projelerini listele.
+    Çıktı formatı SAF JSON olsun:
+    [{"Proje": "İsim", "Tarih": "YYYY-MM-DD", "Butce": "Miktar", "Konum": "Yer", "Link": "URL"}]
     """
     
     try:
         response = model.generate_content([prompt, image])
-        text = response.text.replace('```json', '').replace('```', '').strip()
-        return json.loads(text)
+        # JSON temizliği
+        clean_json = response.text.replace('```json', '').replace('```', '').strip()
+        return json.loads(clean_json)
     except Exception as e:
-        st.error(f"⚠️ Model ({model_name}) Hatası: {e}")
-        st.info("İPUCU: Sol menüden başka bir model seçip tekrar dene!")
+        st.error(f"Okuma Hatası: {e}")
         return []
 
-# --- ARAYÜZ ---
-with st.container():
-    uploaded_files = st.file_uploader("Resimleri Yükle", accept_multiple_files=True, type=['jpg', 'png', 'jpeg'])
+# --- 4. ARAYÜZ ---
+uploaded_files = st.file_uploader("Resim Yükle", accept_multiple_files=True)
+
+if uploaded_files and st.button("Listele 🚀"):
+    st.write("⏳ Resimler taranıyor...")
     
-    if uploaded_files and st.button("Tabloya Dönüştür 🚀"):
+    all_data = []
+    for file in uploaded_files:
+        img = Image.open(file)
+        results = analyze_simple(img)
+        if results:
+            all_data.extend(results)
+
+    # --- SONUÇLARI GÖSTER (TABLO YOK, DÜZ LİSTE VAR) ---
+    if all_data:
+        st.success("✅ İşlem Başarılı!")
         
-        my_bar = st.progress(0, text="Yapay zeka çalışıyor...")
+        # Veriyi DataFrame yap
+        df = pd.DataFrame(all_data)
         
-        for i, file in enumerate(uploaded_files):
-            try:
-                img = Image.open(file)
-                # Seçilen modeli fonksiyona gönderiyoruz
-                results = analyze_image_final(img, selected_model_name)
-                
-                if results:
-                    for res in results:
-                        st.session_state.data.append(res)
-                else:
-                    st.warning(f"{file.name}: Veri bulunamadı.")
-                    
-            except Exception as e:
-                st.error(f"Dosya Hatası: {e}")
-            
-            my_bar.progress((i + 1) / len(uploaded_files))
-            
-        my_bar.empty()
-        st.success("İşlem Tamamlandı!")
-
-# --- TABLO ALANI ---
-st.divider()
-st.subheader("📋 Proje Listesi (Excel Görünümü)")
-
-if st.session_state.data:
-    df = pd.DataFrame(st.session_state.data)
-else:
-    df = pd.DataFrame(columns=["Proje", "Tarih", "Bütçe", "Konum", "Link", "Notlar"])
-
-st.data_editor(
-    df,
-    column_config={
-        "Link": st.column_config.LinkColumn("Link", display_text="🔗 Git"),
-        "Tarih": st.column_config.DateColumn("Tarih", format="DD.MM.YYYY"),
-    },
-    use_container_width=True,
-    num_rows="dynamic",
-    key="final_table"
-)
+        # Sade Tablo (Hata vermez)
+        st.table(df)
+        
+        # İndirme Butonu
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Excel İndir", csv, "projeler.csv", "text/csv")
+        
+    else:
+        st.warning("⚠️ Resimlerden veri çıkarılamadı veya model erişimi yok.")
