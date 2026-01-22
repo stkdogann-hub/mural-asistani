@@ -7,7 +7,8 @@ import json
 # --- AYARLAR ---
 st.set_page_config(page_title="Mural Tablosu", layout="wide", page_icon="🎨")
 
-st.title("🎨 Sıtkı'nın Mural Tablosu (Pro Versiyon)")
+# Başlık
+st.title("🎨 Sıtkı'nın Mural Tablosu (Otomatik Model Seçici)")
 
 # --- SİSTEM HAZIRLIK ---
 if 'data' not in st.session_state:
@@ -21,17 +22,47 @@ except Exception as e:
     st.error(f"🚨 API Key Hatası: {e}")
     st.stop()
 
+# --- AKILLI MODEL SEÇİCİ FONKSİYONU ---
+def get_response_from_any_model(prompt, image):
+    """
+    Sırasıyla tüm modelleri dener. Hangisi çalışırsa cevabı ondan alır.
+    Böylece 'Model Not Found' hatası engellenir.
+    """
+    # Denenecek Modeller Listesi (Yeniden eskiye doğru)
+    models_to_try = [
+        'gemini-1.5-flash',      # En Hızlı
+        'gemini-1.5-pro',        # En Güçlü
+        'gemini-pro-vision',     # Eski Altyapı (Yedek)
+    ]
+    
+    last_error = ""
+    
+    for model_name in models_to_try:
+        try:
+            # Modeli yükle
+            model = genai.GenerativeModel(model_name)
+            
+            # Cevap iste
+            response = model.generate_content([prompt, image])
+            
+            # Eğer buraya geldiyse çalışmış demektir
+            st.toast(f"✅ Başarılı Model: {model_name}", icon="🤖")
+            return response.text
+            
+        except Exception as e:
+            # Hata verirse bir sonrakine geç
+            last_error = e
+            continue
+            
+    # Hiçbiri çalışmazsa hata döndür
+    st.error(f"Tüm modeller denendi ama başarısız oldu. Son hata: {last_error}")
+    return None
+
 # --- ANALİZ FONKSİYONU ---
-def analyze_image_final(image):
-    # DEĞİŞİKLİK BURADA: Flash yerine PRO modelini kullanıyoruz.
-    # Bu model her sürümde çalışır.
-    model = genai.GenerativeModel('gemini-1.5-pro')
-    
+def analyze_image_safe(image):
     prompt = """
-    Bu resmi analiz et. Mural projelerini veya iş fırsatlarını tablo verisi olarak çıkar.
-    Eğer resimde proje yoksa boş liste ver.
-    
-    ÇIKTI FORMATI (Saf JSON):
+    Bu resmi analiz et. Mural projelerini tablo verisi olarak çıkar.
+    ÇIKTI FORMATI (Sadece saf JSON listesi):
     [
       {
         "Proje": "Proje Adı",
@@ -44,13 +75,17 @@ def analyze_image_final(image):
     ]
     """
     
-    try:
-        response = model.generate_content([prompt, image])
-        text = response.text.replace('```json', '').replace('```', '').strip()
-        return json.loads(text)
-    except Exception as e:
-        # Hatayı ekrana bas ki görelim (ama PRO modelde hata vermeyecek)
-        st.error(f"AI Hatası: {e}")
+    # Akıllı fonksiyonu çağır
+    raw_text = get_response_from_any_model(prompt, image)
+    
+    if raw_text:
+        try:
+            # JSON Temizliği
+            cleaned_text = raw_text.replace('```json', '').replace('```', '').strip()
+            return json.loads(cleaned_text)
+        except:
+            return []
+    else:
         return []
 
 # --- ARAYÜZ ---
@@ -59,40 +94,38 @@ with st.container():
     
     if uploaded_files and st.button("Tabloya Dönüştür 🚀"):
         
-        my_bar = st.progress(0, text="Yapay zeka verileri tabloya işliyor...")
+        progress_bar = st.progress(0, text="Uygun model aranıyor ve analiz ediliyor...")
         
         for i, file in enumerate(uploaded_files):
             try:
                 img = Image.open(file)
-                # Analiz fonksiyonunu çağır
-                results = analyze_image_final(img)
+                results = analyze_image_safe(img)
                 
                 if results:
                     for res in results:
                         st.session_state.data.append(res)
                 else:
-                    st.warning(f"{file.name}: Veri bulunamadı.")
+                    st.warning(f"{file.name}: Veri çekilemedi (Resim net olmayabilir).")
                     
             except Exception as e:
-                st.error(f"Dosya Hatası: {e}")
+                st.error(f"Dosya işleme hatası: {e}")
             
-            my_bar.progress((i + 1) / len(uploaded_files))
+            progress_bar.progress((i + 1) / len(uploaded_files))
             
-        my_bar.empty()
+        progress_bar.empty()
         st.success("İşlem Tamamlandı!")
 
 # --- TABLO ALANI ---
 st.divider()
 st.subheader("📋 Proje Listesi")
 
-# Tablo Verisi Hazırlama
+# Tablo Verisi
 if st.session_state.data:
     df = pd.DataFrame(st.session_state.data)
 else:
-    # Boşken başlıkları göster
     df = pd.DataFrame(columns=["Proje", "Tarih", "Bütçe", "Konum", "Link", "Notlar"])
 
-# Tabloyu Çiz (Excel Görünümü)
+# Tabloyu Çiz
 st.data_editor(
     df,
     column_config={
@@ -101,5 +134,5 @@ st.data_editor(
     },
     use_container_width=True,
     num_rows="dynamic",
-    key="project_table"
+    key="mural_table"
 )
