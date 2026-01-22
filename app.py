@@ -49,7 +49,8 @@ def analyze_image_with_ai(image):
         response = model.generate_content([prompt, image])
         text = response.text.replace('```json', '').replace('```', '').strip()
         return json.loads(text)
-    except:
+    except Exception as e:
+        st.error(f"HATA OLUŞTU: {e}") # <--- Hatayı ekrana basacak!
         return []
 
 # --- ARAYÜZ ---
