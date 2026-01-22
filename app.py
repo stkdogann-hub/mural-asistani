@@ -29,7 +29,7 @@ def get_vision_model():
     """Çalışan en iyi görüntü modelini otomatik seçer"""
     try:
         # Önce en hızlı ve yeni modeli dene
-        return genai.GenerativeModel('gemini-1.5-flash')
+        return genai.GenerativeModel('gemini-pro')
     except:
         # Olmazsa pro versiyonunu dene
         return genai.GenerativeModel('gemini-1.5-pro')
